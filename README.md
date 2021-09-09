@@ -9,12 +9,14 @@ Varchar's and integers can have lengths set after them like: varchar(50) or stri
 |Definition|Go type|Postgres|
 |-|-|-|
 |int, integer|int|INT|
-|varchar,string,char|string|VARCHAR|
+|varchar, string, char, character|string|VARCHAR|
 |text|string|TEXT|
 |bool,boolean|bool|BOOLEAN|
 |datetime, timestamp, time, date|time.Time|TIMESTAMP|
 |bigint|int64|BIGINT|
 |smallint|int32|SMALLINT|
+|float, float32, real|float32|FLOAT|
+|double, float64|float64|DOUBLE|
 
 The constraints:
 |Definition|Postgres|Description|

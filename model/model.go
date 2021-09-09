@@ -1,7 +1,7 @@
 package model
 
 import (
-	"log"
+	"fmt"
 	"regexp"
 	"strconv"
 
@@ -48,6 +48,16 @@ type DataType interface {
 	Ref() *Column
 }
 
+func newConfig(in []byte) (*config, error) {
+	x := new(config)
+
+	if err := yaml.Unmarshal(in, x); err != nil {
+		return nil, err
+	}
+
+	return x, nil
+}
+
 type config struct {
 	Pkg    string                       `yaml:"pkg"`
 	Tables map[string]map[string]string `yaml:"tables"`
@@ -56,56 +66,30 @@ type config struct {
 
 // New returns a new initialized model
 func New(in []byte) (*Model, error) {
-	x := new(Model)
+	var x Model
 	x.Tables = map[string][]*Column{}
 	x.Primaries = map[string][]*Column{}
 	x.Uniques = map[string][]*Column{}
+	x.aliases = primitiveTypesAliases()
 
-	conf := new(config)
-	if err := yaml.Unmarshal(in, conf); err != nil {
+	conf, err := newConfig(in)
+	if err != nil {
 		return nil, err
 	}
 
-	for table, columns := range conf.Tables {
-		for name, context := range columns {
-			col := new(Column)
-			col.Table = &table
-			col.Name = name
-
-			col.rawtype, col.Size = rawtype(context)
-			if col.rawtype == `` {
-				log.Fatalf("error in type for table %s column %s", table, name)
-			}
-
-			primary := getSecondSubmatchOrColumn(primaryReg, name, context)
-			if primary != `` {
-				if x.Primaries[primary] == nil {
-					x.Primaries[primary] = []*Column{}
-				}
-				x.Primaries[primary] = append(x.Primaries[primary], col)
-			}
-
-			unique := getSecondSubmatchOrColumn(uniqueReg, name, context)
-			if unique != `` {
-				if x.Uniques[unique] == nil {
-					x.Uniques[unique] = []*Column{}
-				}
-				x.Uniques[unique] = append(x.Uniques[unique], col)
-			}
-
-			col.Default = getFirstSubmatch(defaultReg, context)
-			col.Check = getFirstSubmatch(checkReg, context)
-			col.NotNull = notnullReg.MatchString(context)
-
-			x.Tables[table] = append(x.Tables[table], col)
-		}
+	x, err = appendTablesAndColums(x, conf)
+	if err != nil {
+		return nil, err
 	}
 
-	x.Enums = getEnums(conf.Enums)
+	x = appendEnums(x, conf)
 
-	//TODO get datatype
+	x, err = getDataTypes(x)
+	if err != nil {
+		return nil, err
+	}
 
-	return x, nil
+	return &x, nil
 }
 
 // Model contains the database structure
@@ -115,6 +99,7 @@ type Model struct {
 	Enums     []*Enum
 	Uniques   map[string][]*Column
 	Primaries map[string][]*Column
+	aliases   map[string]DataType
 }
 
 // Column is a database table column
@@ -197,13 +182,123 @@ func getSecondSubmatchOrColumn(reg *regexp.Regexp, columnName, context string) s
 	return ``
 }
 
-func getEnums(enumConfig map[string][]string) (enums []*Enum) {
-	for name, vals := range enumConfig {
+func appendTablesAndColums(m Model, conf *config) (Model, error) {
+	for table, columns := range conf.Tables {
+		for name, content := range columns {
+			col := new(Column)
+			col.Table = &table
+			col.Name = name
+
+			col.rawtype, col.Size = rawtype(content)
+			if col.rawtype == `` {
+				return m, fmt.Errorf("no type found in table %s column %s", table, name)
+			}
+
+			primary := getSecondSubmatchOrColumn(primaryReg, name, content)
+			if primary != `` {
+				if m.Primaries[primary] == nil {
+					m.Primaries[primary] = []*Column{}
+				}
+				m.Primaries[primary] = append(m.Primaries[primary], col)
+			}
+
+			unique := getSecondSubmatchOrColumn(uniqueReg, name, content)
+			if unique != `` {
+				if m.Uniques[unique] == nil {
+					m.Uniques[unique] = []*Column{}
+				}
+				m.Uniques[unique] = append(m.Uniques[unique], col)
+			}
+
+			col.Default = getFirstSubmatch(defaultReg, content)
+			col.Check = getFirstSubmatch(checkReg, content)
+			col.NotNull = notnullReg.MatchString(content)
+
+			m.Tables[table] = append(m.Tables[table], col)
+			m.aliases[table+`.`+name] = col
+		}
+	}
+
+	return m, nil
+}
+
+func appendEnums(m Model, conf *config) Model {
+	for name, values := range conf.Enums {
 		enum := new(Enum)
 		enum.Name = name
-		enum.Values = vals
+		enum.Values = values
 
-		enums = append(enums, enum)
+		m.Enums = append(m.Enums, enum)
+		m.aliases[name] = enum
 	}
-	return
+
+	return m
+}
+
+func getDataTypes(m Model) (Model, error) {
+	for table, cols := range m.Tables {
+		for _, col := range cols {
+			if m.aliases[col.rawtype] == nil {
+				return m, fmt.Errorf("unrecognized datatype in table %s column %s type: %s", table, col.Name, col.rawtype)
+			}
+			col.Datatype = m.aliases[col.rawtype]
+		}
+	}
+
+	return m, nil
+}
+
+type primitiveType string
+
+// Type is an implementation of the Datatype
+func (x primitiveType) Type() string {
+	return string(x)
+}
+
+// Ref is an implementation of the Datatype
+func (x primitiveType) Ref() *Column {
+	return nil
+}
+
+func primitiveTypesAliases() map[string]DataType {
+	m := map[string]DataType{}
+	varchar := primitiveType(`varchar`)
+	m[`string`] = &varchar
+	m[`varchar`] = &varchar
+	m[`char`] = &varchar
+	m[`character`] = &varchar
+
+	integer := primitiveType(`int`)
+	m[`int`] = &integer
+	m[`integer`] = &integer
+
+	float := primitiveType(`float`)
+	m[`float`] = &float
+	m[`float32`] = &float
+	m[`real`] = &float
+
+	timestamp := primitiveType(`timestamp`)
+	m[`timestamp`] = &timestamp
+	m[`date`] = &timestamp
+	m[`time`] = &timestamp
+	m[`datetime`] = &timestamp
+
+	boolean := primitiveType(`boolean`)
+	m[`boolean`] = &boolean
+	m[`bool`] = &boolean
+
+	double := primitiveType(`double`)
+	m[`double`] = &double
+	m[`float64`] = &double
+
+	text := primitiveType(`text`)
+	m[`text`] = &text
+
+	bigint := primitiveType(`bigint`)
+	m[`bigint`] = &bigint
+
+	smallint := primitiveType(`smallint`)
+	m[`smallint`] = &smallint
+
+	return m
 }

@@ -16,6 +16,9 @@ func TestNew(t *testing.T) {
 
 	x, err := New(testModel)
 	as.NoError(err)
+	if err != nil {
+		t.FailNow()
+	}
 
 	as.Eq(1, len(x.Enums))
 	as.Eq(4, len(x.Tables))
@@ -37,6 +40,10 @@ func TestNew(t *testing.T) {
 				case `created_at`:
 					as.Eq(`timestamp`, col.rawtype)
 					as.Eq(`NOW()`, col.Default)
+				}
+			case `account_roles`:
+				if col.Name == `account.id` {
+					as.Eq(`accounts.id`, col.rawtype)
 				}
 			}
 		}
