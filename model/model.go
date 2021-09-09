@@ -100,6 +100,14 @@ type Model struct {
 	Uniques   map[string][]*Column
 	Primaries map[string][]*Column
 	aliases   map[string]DataType
+	conf      config
+}
+
+//
+func (x Model) Compare(old Model) map[string]string {
+	// TODO return a list of this added, updated and deleted
+	// list will look like '+default(NOW()),-notnull,~check(started_at < ended_at)
+	//
 }
 
 // Column is a database table column

@@ -1,8 +1,10 @@
 package dialect
 
+// Dialect is a parser that transforms the given arguments
+// of its functions into an SQL statement of the given dialect
 type Dialect interface {
 	Type(name string, size int) string
-	AddTable(name string) string
+	AddTable(name string, ifnotexists bool) string
 	DropTable(name string) string
 	AddColumn(table, column, typename string, size int) string
 	DropColumn(table, column string) string
@@ -19,12 +21,25 @@ type Dialect interface {
 	DeleteNotNull(table, column string) string
 	AddCheck(table, column, check string) string
 	UpdateCheck(table, column, check string) string
-	DeleteCheck(table, column string) string
+	DropCheck(table, column string) string
 	AddEnum(name string, values []string) string
 	UpdateEnum(name string, values []string) string
 	DeleteEnum(name string) string
+	AddDefault(table, column, value string) string
+	DropDefault(table, column) string
+
+	AddVersionTable() string
+	CheckVersion() string
+	InsertVersion(conf []byte) string
 
 	//Select(table string, columns ...string) string
 	//And(stmt1, stmt2 string) string
 	//Or(stmt1, stmt2 string) string
+	//Cursor(stmt string) (key, query string)
+}
+
+// GetByDriver returns a dialect of the given driver
+func GetByDriver(driver string) Dialect {
+
+	return nil
 }
