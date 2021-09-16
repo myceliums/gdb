@@ -6,9 +6,10 @@ tables:
     id: serial primary
     username: varchar(50) unique not null
     password: varchar not null
-    email: varchar not null
+    email: varchar not null unique
     email_verified_at: timestamp
     created_at: timestamp default(NOW())
+    bio: text
 
   roles:
     id: int primary auto increment
@@ -23,9 +24,14 @@ tables:
     id: int primary
     account_id: accounts.id not null unique(account_relationship)
     relationship_id: accounts.id not null unique(account_relationship)
-    bond: bond_type default('friend')
     verified_at: timestamp
     token: varchar not null
+
+  posts:
+    id: serial primary
+    created_by: accounts.id not null
+    created_at: timestamp default(NOW())
+    context: text not null
 
 enums:
   bond_type:

@@ -11,14 +11,11 @@ import (
 //go:embed testmodel.yml
 var testModel []byte
 
-func TestNew(t *testing.T) {
-	as := assert.New(t)
+//go:embed testnextmodel.yml
+var testNextModel []byte
 
-	x, err := New(testModel)
-	as.NoError(err)
-	if err != nil {
-		t.FailNow()
-	}
+func TestNew(t *testing.T) {
+	x, as := initTest(t)
 
 	as.Eq(1, len(x.Enums))
 	as.Eq(4, len(x.Tables))
@@ -30,7 +27,8 @@ func TestNew(t *testing.T) {
 			case `accounts`:
 				switch col.Name {
 				case `id`:
-					as.Eq(`int`, col.rawtype)
+					as.Eq(`serial`, col.rawtype)
+					as.Eq(`int`, col.Datatype.Type())
 					as.Eq(0, col.Size)
 					as.Eq(false, col.NotNull)
 				case `username`:
@@ -48,4 +46,15 @@ func TestNew(t *testing.T) {
 			}
 		}
 	}
+}
+
+func initTest(t *testing.T) (*Model, assert.Assert) {
+	as := assert.New(t)
+	x, err := New(testModel)
+	as.NoError(err)
+	if err != nil {
+		t.FailNow()
+	}
+
+	return x, as
 }
