@@ -50,11 +50,17 @@ func TestNew(t *testing.T) {
 
 func initTest(t *testing.T) (*Model, assert.Assert) {
 	as := assert.New(t)
-	x, err := New(testModel)
-	as.NoError(err)
+	x := initModel(t, testModel)
+
+	return x, as
+}
+
+func initModel(t *testing.T, in []byte) *Model {
+	x, err := New(in)
 	if err != nil {
+		t.Errorf("error reading given test configuration: %v", err)
 		t.FailNow()
 	}
 
-	return x, as
+	return x
 }

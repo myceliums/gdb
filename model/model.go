@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"log"
 	"regexp"
 	"strconv"
 
@@ -51,18 +52,49 @@ type DataType interface {
 }
 
 func newConfig(in []byte) (*Config, error) {
-	x := new(Config)
+	var cfile map[string]interface{}
 
-	if err := yaml.Unmarshal(in, x); err != nil {
+	if err := yaml.Unmarshal(in, &cfile); err != nil {
 		return nil, err
+	}
+
+	log.Println(len(cfile))
+
+	x := new(Config)
+	x.Tables = map[string]map[string]string{}
+	x.Enums = map[string][]string{}
+
+	for k, t := range cfile {
+		switch m := t.(type) {
+		case []interface{}:
+			var vals []string
+			for _, mm := range m {
+				if sm, ok := mm.(string); ok {
+					vals = append(vals, sm)
+				}
+			}
+			x.Enums[k] = vals
+		case map[interface{}]interface{}:
+			vals := map[string]string{}
+			for kk, mm := range m {
+				sk, kok := kk.(string)
+				smm, vok := mm.(string)
+				if kok && vok {
+					vals[sk] = smm
+				}
+			}
+			x.Tables[k] = vals
+		default:
+			log.Printf("%s: %T\n", k, t)
+		}
 	}
 
 	return x, nil
 }
 
 type Config struct {
-	Tables map[string]map[string]string `yaml:"tables"`
-	Enums  map[string][]string          `yaml:"enums"`
+	Tables map[string]map[string]string `yaml:"tables,flow"`
+	Enums  map[string][]string          `yaml:"enums,flow"`
 }
 
 // New returns a new initialized model
@@ -72,6 +104,7 @@ func New(in []byte) (*Model, error) {
 	x.Primaries = map[string][]*Column{}
 	x.Uniques = map[string][]*Column{}
 	x.Foreigns = map[string]*Column{}
+	x.Enums = map[string]*Enum{}
 	x.aliases = primitiveTypesAliases()
 
 	conf, err := newConfig(in)
@@ -81,12 +114,12 @@ func New(in []byte) (*Model, error) {
 
 	x.conf = conf
 
-	x, err = appendTablesAndColums(x, conf)
+	x, err = appendTablesAndColums(x, conf.Tables)
 	if err != nil {
 		return nil, err
 	}
 
-	x = appendEnums(x, conf)
+	x = appendEnums(x, conf.Enums)
 
 	x, err = getDataTypes(x)
 	if err != nil {
@@ -109,7 +142,7 @@ type Model struct {
 
 // Column is a database table column
 type Column struct {
-	Table        *string
+	Table        string
 	Name         string
 	Datatype     DataType
 	Ref          *Column
@@ -182,8 +215,8 @@ func getSecondSubmatchOrColumn(reg *regexp.Regexp, columnName, context string) s
 	return ``
 }
 
-func appendTablesAndColums(m Model, conf *Config) (Model, error) {
-	for table, columns := range conf.Tables {
+func appendTablesAndColums(m Model, tables map[string]map[string]string) (Model, error) {
+	for table, columns := range tables {
 		if _, ok := m.Tables[table]; !ok {
 			m.Tables[table] = map[string]*Column{}
 		}
@@ -194,7 +227,7 @@ func appendTablesAndColums(m Model, conf *Config) (Model, error) {
 			col := new(Column)
 			col.raw = content
 
-			col.Table = &tname
+			col.Table = tname
 			col.Name = name
 
 			col.rawtype, col.Size = rawtype(content)
@@ -233,12 +266,12 @@ func appendTablesAndColums(m Model, conf *Config) (Model, error) {
 	return m, nil
 }
 
-func appendEnums(m Model, conf *Config) Model {
-	if m.Enums == nil {
+func appendEnums(m Model, enums map[string][]string) Model {
+	if enums == nil {
 		m.Enums = map[string]*Enum{}
 	}
 
-	for name, values := range conf.Enums {
+	for name, values := range enums {
 		enum := new(Enum)
 		enum.Name = name
 		enum.Values = values
@@ -260,7 +293,7 @@ func getDataTypes(m Model) (Model, error) {
 			col.Datatype = m.aliases[col.rawtype]
 			if ref, ok := col.Datatype.(*Column); ok {
 				col.Ref = ref
-				m.Foreigns[*col.Table+`.`+col.Name] = col
+				m.Foreigns[col.Table+`.`+col.Name] = col
 			}
 		}
 	}

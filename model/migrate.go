@@ -2,6 +2,8 @@ package model
 
 import (
 	"database/sql"
+	"io"
+	"log"
 	"strings"
 
 	"github.com/myceliums/gdb/dialect"
@@ -29,9 +31,8 @@ func Migrate(dialect dialect.Dialect, db *sql.DB, mdl Model) error {
 		return err
 	}
 
-	var migration string
 	if version == 0 {
-		migration = InitialSQL(dialect, mdl)
+		q = InitialSQL(dialect, mdl)
 	}
 
 	if version > 0 {
@@ -40,15 +41,15 @@ func Migrate(dialect dialect.Dialect, db *sql.DB, mdl Model) error {
 			return err
 		}
 
-		migration = UpgradeSQL(dialect, *oldMdl, mdl)
-
 		q = dialect.InsertVersion()
 		if _, err := tx.Exec(q, version+1, mdl.conf); err != nil {
 			return err
 		}
+
+		q = UpgradeSQL(dialect, *oldMdl, mdl)
 	}
 
-	if _, err := tx.Exec(migration); err != nil {
+	if _, err := tx.Exec(q); err != nil {
 		return err
 	}
 
@@ -56,13 +57,14 @@ func Migrate(dialect dialect.Dialect, db *sql.DB, mdl Model) error {
 }
 
 // InitialSQL returns the sql to model the database after the given configuration.
-func InitialSQL(dialect dialect.Dialect, mdl Model) (q string) {
+func InitialSQL(dialect dialect.Dialect, mdl Model) string {
+	builder := &strings.Builder{}
 	for _, enum := range mdl.Enums {
-		q += dialect.AddEnum(enum.Name, enum.Values)
+		builder.WriteString(dialect.AddEnum(enum.Name, enum.Values))
 	}
 
 	for table, columns := range mdl.Tables {
-		q += addTable(dialect, table, columns)
+		addTable(builder, dialect, table, columns)
 	}
 
 	for _, cols := range mdl.Primaries {
@@ -70,7 +72,7 @@ func InitialSQL(dialect dialect.Dialect, mdl Model) (q string) {
 		for _, col := range cols {
 			colNames = append(colNames, col.Name)
 		}
-		q += dialect.AddPrimaryKey(*cols[0].Table, colNames)
+		builder.WriteString(dialect.AddPrimaryKey(cols[0].Table, colNames))
 	}
 
 	for id, cols := range mdl.Uniques {
@@ -78,48 +80,51 @@ func InitialSQL(dialect dialect.Dialect, mdl Model) (q string) {
 		for _, col := range cols {
 			colNames = append(colNames, col.Name)
 		}
-		q += dialect.AddUnique(id, *cols[0].Table, colNames)
+		builder.WriteString(dialect.AddUnique(id, cols[0].Table, colNames))
 	}
 
 	for _, col := range mdl.Foreigns {
-		q += dialect.AddForeignKey(*col.Table, col.Name, *col.Ref.Table, col.Ref.Name)
+		builder.WriteString(dialect.AddForeignKey(col.Table, col.Name, col.Ref.Table, col.Ref.Name))
 	}
 
-	return q
+	return builder.String()
 }
 
 // UpgradeSQL returns the sql which resolves the differential safely between 2 models
 func UpgradeSQL(dialect dialect.Dialect, prev, curr Model) (q string) {
+	builder := &strings.Builder{}
 	for n, enum := range curr.Enums {
-		osval := strings.Join(prev.Enums[n].Values, ` `)
-		sval := strings.Join(enum.Values, ` `)
+		var osval, sval string
+
+		oenum, ok := prev.Enums[n]
+		if !ok {
+			builder.WriteString(dialect.AddEnum(enum.Name, enum.Values)) // nolint: errcheck
+			goto ENUMLOOPEND
+		}
+
+		osval = strings.Join(oenum.Values, ` `)
+		sval = strings.Join(enum.Values, ` `)
 
 		if osval == sval {
 			break
 		}
 
-		if sval == `` && sval != osval {
-			q += dialect.DropEnum(prev.Enums[n].Name)
-			break
-		} else if sval != `` && osval == `` {
-			q += dialect.AddEnum(enum.Name, enum.Values)
-			break
-		}
-
 		for _, val := range enum.Values {
 			if !strings.Contains(osval, val) {
-				q += dialect.AppendEnum(n, val)
+				builder.WriteString(dialect.AppendEnum(n, val)) // nolint: errcheck
 				osval = strings.Trim(osval, val)
 				osval = strings.TrimSuffix(osval, ` `)
 			}
 		}
 
 		for _, delval := range strings.Split(osval, ` `) {
-			q += dialect.DeleteEnum(n, delval)
+			builder.WriteString(dialect.DeleteEnum(n, delval))
 		}
+
+	ENUMLOOPEND:
 	}
 
-	q += compareTables(dialect, curr.Tables, prev.Tables)
+	compareTables(builder, dialect, curr.Tables, prev.Tables)
 
 	for k, cols := range curr.Primaries {
 		oldCols := prev.Primaries[k]
@@ -135,11 +140,11 @@ func UpgradeSQL(dialect dialect.Dialect, prev, curr Model) (q string) {
 		}
 
 		if len(names) < 1 && len(oldnames) > 0 {
-			q += dialect.DropPrimaryKey(*cols[0].Table)
+			builder.WriteString(dialect.DropPrimaryKey(cols[0].Table)) // nolint: errcheck
 		} else if len(names) > 0 && len(oldnames) < 1 {
-			q += dialect.AddPrimaryKey(*cols[0].Table, names)
+			builder.WriteString(dialect.AddPrimaryKey(cols[0].Table, names)) // nolint: errcheck
 		} else if len(names) > 0 && strings.Join(names, ` `) != strings.Join(oldnames, ` `) {
-			q += dialect.UpdatePrimaryKey(*cols[0].Table, names)
+			builder.WriteString(dialect.UpdatePrimaryKey(cols[0].Table, names)) // nolint: errcheck
 		}
 
 		if len(prev.Primaries[k]) < 1 {
@@ -149,7 +154,7 @@ func UpgradeSQL(dialect dialect.Dialect, prev, curr Model) (q string) {
 
 	for k, cols := range prev.Primaries {
 		if len(curr.Primaries[k]) < 1 {
-			q += dialect.DropPrimaryKey(*cols[0].Table)
+			builder.WriteString(dialect.DropPrimaryKey(cols[0].Table)) // nolint: errcheck
 		}
 	}
 
@@ -173,140 +178,138 @@ func UpgradeSQL(dialect dialect.Dialect, prev, curr Model) (q string) {
 		}
 
 		if len(names) < 1 && len(oldnames) > 0 {
-			q += dialect.DropUnique(k, *cols[0].Table)
+			builder.WriteString(dialect.DropUnique(k, cols[0].Table)) // nolint: errcheck
 		} else if len(names) > 0 && len(oldnames) < 1 {
-			q += dialect.AddUnique(k, *cols[0].Table, names)
+			builder.WriteString(dialect.AddUnique(k, cols[0].Table, names)) // nolint: errcheck
 		} else if len(names) > 0 && strings.Join(names, ` `) != strings.Join(oldnames, ` `) {
-			q += dialect.UpdateUnique(k, *cols[0].Table, names)
+			builder.WriteString(dialect.UpdateUnique(k, cols[0].Table, names)) // nolint: errcheck
 		}
 
 	}
 
 	for k, cols := range prev.Uniques {
 		if len(curr.Uniques[k]) < 1 {
-			q += dialect.DropUnique(k, *cols[0].Table)
+			builder.WriteString(dialect.DropUnique(k, cols[0].Table)) // nolint: errcheck
 		}
 	}
 
 	for k, col := range curr.Foreigns {
 		oldcol := prev.Foreigns[k]
 		if oldcol == nil {
-			q += dialect.AddForeignKey(*col.Table, col.Name, *col.Ref.Table, col.Ref.Name)
-			break
+			builder.WriteString(dialect.AddForeignKey(col.Table, col.Name, col.Ref.Table, col.Ref.Name)) // nolint: errcheck
+			goto FOREIGNLOOPEND
 		}
 
-		if !(*oldcol.Table == *col.Table && oldcol.Name == col.Name) {
-			q += dialect.UpdateForeignKey(*col.Table, col.Name, *col.Ref.Table, col.Ref.Name)
+		if !(oldcol.Table == col.Table && oldcol.Name == col.Name) {
+			builder.WriteString(dialect.UpdateForeignKey(col.Table, col.Name, col.Ref.Table, col.Ref.Name)) // nolint: errcheck
 		}
 
+	FOREIGNLOOPEND:
 		delete(prev.Foreigns, k)
 	}
 
 	for k, ocol := range prev.Foreigns {
 		if curr.Foreigns[k] == nil {
-			q += dialect.DropForeignKey(*ocol.Table, ocol.Name)
+			builder.WriteString(dialect.DropForeignKey(ocol.Table, ocol.Name)) // nolint: errcheck
 		}
 	}
 
-	return q
+	return builder.String()
 }
 
-func compareTables(dialect dialect.Dialect, tables, old map[string]map[string]*Column) (q string) {
+func compareTables(wr io.StringWriter, dialect dialect.Dialect, tables, old map[string]map[string]*Column) {
 	for tname, cols := range tables {
 		if old[tname] == nil {
-			q += addTable(dialect, table, tables[tname])
-			delete(old, tname)
-			break
+			addTable(wr, dialect, tname, tables[tname])
+			goto TABLELOOPEND
 		}
 
 		for cname, col := range cols {
 			oldcol, ok := old[tname][cname]
 			if !ok {
-				q += dialect.AddColumn(*col.Table, col.Name, col.Datatype.Type(), col.Size)
+				log.Printf("%s.%s\n", tname, cname)
+				wr.WriteString(dialect.AddColumn(col.Table, col.Name, col.Datatype.Type(), col.Size)) // nolint: errcheck
 			}
 
 			if !ok || col.raw == oldcol.raw {
 				delete(old[tname], cname)
-				break
+				goto COLLOOPEND
 			}
 
-			if col.rawtype != old[tname][cname].rawtype || col.Size != old[tname][cname].Size {
-				q += dialect.UpdateColumn(tname, cname, col.Datatype.Type(), col.Size)
+			if col.rawtype != oldcol.rawtype || col.Size != oldcol.Size {
+				wr.WriteString(dialect.UpdateColumn(tname, cname, col.Datatype.Type(), col.Size)) // nolint: errcheck
 			}
 
-			if col.AutoIncement && !old[tname][cname].AutoIncement {
-				q += dialect.SetAutoIncrement(tname, cname)
-			} else if !col.AutoIncement && old[tname][cname].AutoIncement {
-				q += dialect.UnsetAutoIncrement(tname, cname)
+			if col.AutoIncement && !oldcol.AutoIncement {
+				wr.WriteString(dialect.SetAutoIncrement(tname, cname)) // nolint: errcheck
+			} else if !col.AutoIncement && oldcol.AutoIncement {
+				wr.WriteString(dialect.UnsetAutoIncrement(tname, cname)) // nolint: errcheck
 			}
 
-			if col.NotNull != old[tname][cname].NotNull {
+			if col.NotNull != oldcol.NotNull {
 				if col.NotNull {
-					q += dialect.SetNotNull(*col.Table, col.Name)
+					wr.WriteString(dialect.SetNotNull(col.Table, col.Name)) // nolint: errcheck
 				} else {
-					q += dialect.DeleteNotNull(*col.Table, col.Name)
+					wr.WriteString(dialect.DeleteNotNull(col.Table, col.Name)) // nolint: errcheck
 				}
 			}
 
-			if col.Default != old[tname][cname].Default {
+			if col.Default != oldcol.Default {
 				if col.Default == `` {
-					q += dialect.DropDefault(*col.Table, col.Name)
+					wr.WriteString(dialect.DropDefault(col.Table, col.Name)) // nolint: errcheck
 				} else {
-					q += dialect.SetDefault(*col.Table, col.Name, col.Default)
+					wr.WriteString(dialect.SetDefault(col.Table, col.Name, col.Default)) // nolint: errcheck
 				}
 			}
 
+		COLLOOPEND:
 			delete(old[tname], cname)
 		}
 
-		if len(old[table]) < 1 {
-			delete(old, table)
+	TABLELOOPEND:
+		if len(old[tname]) < 1 {
+			delete(old, tname)
 		}
 	}
 
 	for table, cols := range old {
 		if len(tables[table]) == 0 {
-			q += dialect.DropTable(table)
-			break
+			wr.WriteString(dialect.DropTable(table)) // nolint: errcheck
+			goto OLDTABLELOOPEND
 		}
 
 		for i, col := range cols {
 			if tables[table][i] == nil {
-				q += dialect.DropColumn(table, col.Name)
+				wr.WriteString(dialect.DropColumn(table, col.Name)) // nolint: errcheck
 			}
 		}
+	OLDTABLELOOPEND:
 	}
-
-	return
 }
 
-func addTable(dialect dialect.Dialect, table string, cols map[string]*Column) (q string) {
-	q += dialect.AddTable(table, false)
+func addTable(wr io.StringWriter, dialect dialect.Dialect, table string, cols map[string]*Column) {
+	wr.WriteString(dialect.AddTable(table, false)) // nolint: errcheck
 	for _, col := range cols {
-		q += addColumn(dialect, col)
+		addColumn(wr, dialect, col)
 	}
-
-	return
 }
 
-func addColumn(dialect dialect.Dialect, col *Column) (q string) {
-	q += dialect.AddColumn(*col.Table, col.Name, col.Datatype.Type(), col.Size)
+func addColumn(wr io.StringWriter, dialect dialect.Dialect, col *Column) {
+	wr.WriteString(dialect.AddColumn(col.Table, col.Name, col.Datatype.Type(), col.Size)) // nolint: errcheck
 
 	if col.AutoIncement {
-		q += dialect.SetAutoIncrement(*col.Table, col.Name)
+		wr.WriteString(dialect.SetAutoIncrement(col.Table, col.Name)) // nolint: errcheck
 	}
 
 	if col.NotNull {
-		q += dialect.SetNotNull(*col.Table, col.Name)
+		wr.WriteString(dialect.SetNotNull(col.Table, col.Name)) // nolint: errcheck
 	}
 
 	if col.Default != `` {
-		q += dialect.SetDefault(*col.Table, col.Name, col.Default)
+		wr.WriteString(dialect.SetDefault(col.Table, col.Name, col.Default)) // nolint: errcheck
 	}
 
 	if col.Check != `` {
-		q += dialect.AddCheck(*col.Table, col.Name, col.Check)
+		wr.WriteString(dialect.AddCheck(col.Table, col.Name, col.Check)) // nolint: errcheck
 	}
-
-	return
 }

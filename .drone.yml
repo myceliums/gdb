@@ -3,7 +3,8 @@ name: default
 
 steps:
 - name: test
-  image: golang
+  image: golangci/golangci-lint:latest-alpine
   commands:
   - go mod tidy
-  - go test ./...
+  - golangci-lint run
+  - go test -v ./...
