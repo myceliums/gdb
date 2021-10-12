@@ -27,7 +27,12 @@ func Migrate(dialect dialect.Dialect, db *sql.DB, mdl Model) error {
 	q = dialect.CheckVersion()
 	var version int
 	var storedConfig []byte
-	if err := tx.QueryRow(q).Scan(&version, &storedConfig); err != nil {
+	if err := tx.QueryRow(q).Scan(&version, &storedConfig); err != nil && err != sql.ErrNoRows {
+		return err
+	}
+
+	q = dialect.InsertVersion()
+	if _, err := tx.Exec(q, version+1, mdl.Config()); err != nil {
 		return err
 	}
 
@@ -41,13 +46,10 @@ func Migrate(dialect dialect.Dialect, db *sql.DB, mdl Model) error {
 			return err
 		}
 
-		q = dialect.InsertVersion()
-		if _, err := tx.Exec(q, version+1, mdl.conf); err != nil {
-			return err
-		}
-
 		q = UpgradeSQL(dialect, *oldMdl, mdl)
 	}
+
+	log.Printf("Applying migration, version: %d:\n%s\n", version+1, q)
 
 	if _, err := tx.Exec(q); err != nil {
 		return err
@@ -117,9 +119,7 @@ func UpgradeSQL(dialect dialect.Dialect, prev, curr Model) (q string) {
 			}
 		}
 
-		for _, delval := range strings.Split(osval, ` `) {
-			builder.WriteString(dialect.DeleteEnum(n, delval))
-		}
+		delete(prev.Enums, n)
 
 	ENUMLOOPEND:
 	}
@@ -127,23 +127,46 @@ func UpgradeSQL(dialect dialect.Dialect, prev, curr Model) (q string) {
 	compareTables(builder, dialect, curr.Tables, prev.Tables)
 
 	for k, cols := range curr.Primaries {
-		oldCols := prev.Primaries[k]
+		var names []string
+		var update bool
 
-		var names, oldnames []string
+		mnames := map[string]int{}
+		moldNames := map[string]int{}
+
 		for i, col := range cols {
+			mnames[col.Name] = i
 			names = append(names, col.Name)
-			prev.Primaries[k] = append(prev.Primaries[k][:i], prev.Primaries[k][i+1:]...)
 		}
 
-		for _, col := range oldCols {
-			oldnames = append(oldnames, col.Name)
+		oldCols, ok := prev.Primaries[k]
+		if !ok {
+			goto PRIMARYLOOPEND
 		}
 
-		if len(names) < 1 && len(oldnames) > 0 {
-			builder.WriteString(dialect.DropPrimaryKey(cols[0].Table)) // nolint: errcheck
-		} else if len(names) > 0 && len(oldnames) < 1 {
-			builder.WriteString(dialect.AddPrimaryKey(cols[0].Table, names)) // nolint: errcheck
-		} else if len(names) > 0 && strings.Join(names, ` `) != strings.Join(oldnames, ` `) {
+		for i, col := range oldCols {
+			if _, ok := mnames[col.Name]; !ok {
+				update = true
+			}
+			moldNames[col.Name] = i
+		}
+
+		for _, col := range cols {
+			oldIndex, ok := moldNames[col.Name]
+			if !ok {
+				update = true
+			}
+
+			if l := len(prev.Primaries[k]); l > 1 {
+				prev.Primaries[k] = append(prev.Primaries[k][:oldIndex], prev.Primaries[k][oldIndex+1:]...)
+			} else if l == 1 {
+				prev.Primaries[k] = []*Column{}
+			}
+		}
+
+	PRIMARYLOOPEND:
+		if !ok {
+			builder.WriteString(dialect.AddPrimaryKey(k, names)) // nolint: errcheck
+		} else if update {
 			builder.WriteString(dialect.UpdatePrimaryKey(cols[0].Table, names)) // nolint: errcheck
 		}
 
@@ -152,45 +175,54 @@ func UpgradeSQL(dialect dialect.Dialect, prev, curr Model) (q string) {
 		}
 	}
 
-	for k, cols := range prev.Primaries {
-		if len(curr.Primaries[k]) < 1 {
-			builder.WriteString(dialect.DropPrimaryKey(cols[0].Table)) // nolint: errcheck
-		}
-	}
-
 	for k, cols := range curr.Uniques {
-		oldCols := prev.Uniques[k]
+		var names []string
+		var update bool
 
-		var names, oldnames []string
+		mnames := map[string]int{}
+		moldNames := map[string]int{}
+
 		for i, col := range cols {
+			mnames[col.Name] = i
 			names = append(names, col.Name)
+		}
 
-			un := prev.Uniques[k]
-			if len(prev.Uniques[k]) == 1 {
-				delete(prev.Uniques, k)
-			} else {
-				prev.Uniques[k] = append(un[:i], un[i+1:]...)
+		oldCols, ok := prev.Uniques[k]
+		if !ok {
+			goto UNIQUELOOPEND
+		}
+
+		for i, col := range oldCols {
+			if _, ok := mnames[col.Name]; !ok {
+				update = true
+			}
+			moldNames[col.Name] = i
+		}
+
+		for _, col := range cols {
+			oldIndex, ok := moldNames[col.Name]
+			if !ok {
+				update = true
+			}
+
+			if l := len(prev.Uniques[k]); l > 1 {
+				prev.Uniques[k] = append(prev.Uniques[k][:oldIndex], prev.Uniques[k][oldIndex+1:]...)
+			} else if l == 1 {
+				prev.Uniques[k] = []*Column{}
 			}
 		}
 
-		for _, col := range oldCols {
-			oldnames = append(oldnames, col.Name)
-		}
-
-		if len(names) < 1 && len(oldnames) > 0 {
-			builder.WriteString(dialect.DropUnique(k, cols[0].Table)) // nolint: errcheck
-		} else if len(names) > 0 && len(oldnames) < 1 {
+	UNIQUELOOPEND:
+		if !ok {
 			builder.WriteString(dialect.AddUnique(k, cols[0].Table, names)) // nolint: errcheck
-		} else if len(names) > 0 && strings.Join(names, ` `) != strings.Join(oldnames, ` `) {
+		} else if update {
 			builder.WriteString(dialect.UpdateUnique(k, cols[0].Table, names)) // nolint: errcheck
 		}
 
-	}
-
-	for k, cols := range prev.Uniques {
-		if len(curr.Uniques[k]) < 1 {
-			builder.WriteString(dialect.DropUnique(k, cols[0].Table)) // nolint: errcheck
+		if len(prev.Uniques[k]) < 1 {
+			delete(prev.Uniques, k)
 		}
+
 	}
 
 	for k, col := range curr.Foreigns {
@@ -214,6 +246,22 @@ func UpgradeSQL(dialect dialect.Dialect, prev, curr Model) (q string) {
 		}
 	}
 
+	for k, cols := range prev.Primaries {
+		if ncols, ok := curr.Primaries[k]; !ok || len(ncols) < 1 {
+			builder.WriteString(dialect.DropPrimaryKey(cols[0].Table)) // nolint: errcheck
+		}
+	}
+
+	for k, cols := range prev.Uniques {
+		if ncols, ok := curr.Uniques[k]; !ok || len(ncols) < 1 {
+			builder.WriteString(dialect.DropUnique(k, cols[0].Table)) // nolint: errcheck
+		}
+	}
+
+	for _, enum := range prev.Enums {
+		builder.WriteString(dialect.DropEnum(enum.Name)) // nolint: errcheck
+	}
+
 	return builder.String()
 }
 
@@ -227,7 +275,6 @@ func compareTables(wr io.StringWriter, dialect dialect.Dialect, tables, old map[
 		for cname, col := range cols {
 			oldcol, ok := old[tname][cname]
 			if !ok {
-				log.Printf("%s.%s\n", tname, cname)
 				wr.WriteString(dialect.AddColumn(col.Table, col.Name, col.Datatype.Type(), col.Size)) // nolint: errcheck
 			}
 

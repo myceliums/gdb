@@ -56,7 +56,7 @@ func (x Postgres) UpdatePrimaryKey(table string, columns []string) string {
 }
 
 func (x Postgres) DropPrimaryKey(table string) string {
-	return fmt.Sprintf("ALTER TABLE %s DROP CONSTRAINT pk_%s;", table, table)
+	return fmt.Sprintf("ALTER TABLE %s DROP CONSTRAINT pk_%s;\n", table, table)
 }
 
 func (x Postgres) AddForeignKey(table, column, referenceTable, referenceColumn string) string {
@@ -111,10 +111,6 @@ func (x Postgres) AppendEnum(name, value string) string {
 	return fmt.Sprintf("ALTER TYPE %s ADD VALUE '%s';\n", name, value)
 }
 
-func (x Postgres) DeleteEnum(name, value string) string {
-	return ``
-}
-
 func (x Postgres) DropEnum(name string) string {
 	return fmt.Sprintf("DROP TYPE %s;\n", name)
 }
@@ -127,12 +123,19 @@ func (x Postgres) DropDefault(table, column string) string {
 	return fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s DROP DEFAULT;\n", table, column)
 }
 
-func (x Postgres) SetAutoIncrement(table, column string) string {
-	return fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s SET DATA TYPE SERIAL;\n", table, column)
+func (x Postgres) SetAutoIncrement(table, column string) (q string) {
+	q += fmt.Sprintf("CREATE SEQUENCE seq_%s_%s;\n", table, column)
+	q += fmt.Sprintf("SELECT setval('seq_%s_%s', (SELECT max(%s) FROM %s));\n", table, column, column, table)
+	q += fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s SET DEFAULT nextval('seq_%s_%s'::regclass);\n", table, column, table, column)
+
+	return
 }
 
-func (x Postgres) UnsetAutoIncrement(table, column string) string {
-	return fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s SET DATA TYPE INT;\n", table, column)
+func (x Postgres) UnsetAutoIncrement(table, column string) (q string) {
+	q = fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s DROP DEFAULT;\n", table, column)
+	q += fmt.Sprintf("DROP SEQUENCE seq_%s_%s CASCADE;", table, column)
+
+	return
 }
 
 func (x Postgres) AddVersionTable() string {

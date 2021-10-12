@@ -25,7 +25,6 @@ type Dialect interface {
 	DropCheck(table, column string) string
 	AddEnum(name string, values []string) string
 	AppendEnum(name, values string) string
-	DeleteEnum(name, value string) string
 	DropEnum(name string) string
 	SetDefault(table, column, value string) string
 	DropDefault(table, column string) string

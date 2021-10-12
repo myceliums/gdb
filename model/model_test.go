@@ -5,6 +5,7 @@ import (
 
 	_ "embed"
 
+	_ "github.com/lib/pq"
 	"github.com/myceliums/assert"
 )
 
@@ -46,6 +47,9 @@ func TestNew(t *testing.T) {
 			}
 		}
 	}
+
+	as.Eq(1, len(x.Primaries[`accounts`]))
+	as.Eq(4, len(x.Foreigns))
 }
 
 func initTest(t *testing.T) (*Model, assert.Assert) {

@@ -2,7 +2,6 @@ package model
 
 import (
 	"fmt"
-	"log"
 	"regexp"
 	"strconv"
 
@@ -34,7 +33,7 @@ var (
 	// [0] primary(id_name)
 	// [1] (id_name)
 	// [2] id_name
-	primaryReg = regexp.MustCompile(`primary key|primarykey|primary(\((\w+)\))?`)
+	primaryReg = regexp.MustCompile(`primary key|primarykey|primary`)
 
 	// uniqueReg
 	// [0] unique(id_name)
@@ -58,11 +57,10 @@ func newConfig(in []byte) (*Config, error) {
 		return nil, err
 	}
 
-	log.Println(len(cfile))
-
 	x := new(Config)
 	x.Tables = map[string]map[string]string{}
 	x.Enums = map[string][]string{}
+	x.raw = in
 
 	for k, t := range cfile {
 		switch m := t.(type) {
@@ -85,7 +83,7 @@ func newConfig(in []byte) (*Config, error) {
 			}
 			x.Tables[k] = vals
 		default:
-			log.Printf("%s: %T\n", k, t)
+			return nil, fmt.Errorf("'%s' has an unknown configuration. want either map[string][]string or map[string]map[string]string, but has %T", k, t)
 		}
 	}
 
@@ -95,6 +93,7 @@ func newConfig(in []byte) (*Config, error) {
 type Config struct {
 	Tables map[string]map[string]string `yaml:"tables,flow"`
 	Enums  map[string][]string          `yaml:"enums,flow"`
+	raw    []byte
 }
 
 // New returns a new initialized model
@@ -138,6 +137,11 @@ type Model struct {
 	Foreigns  map[string]*Column
 	aliases   map[string]DataType
 	conf      *Config
+}
+
+// Config returns the raw config
+func (x Model) Config() []byte {
+	return x.conf.raw
 }
 
 // Column is a database table column
@@ -235,13 +239,12 @@ func appendTablesAndColums(m Model, tables map[string]map[string]string) (Model,
 				return m, fmt.Errorf("no type found in table %s column %s", table, name)
 			}
 
-			primary := getSecondSubmatchOrColumn(primaryReg, name, content)
-			if primary != `` {
-				if m.Primaries[primary] == nil {
-					m.Primaries[primary] = []*Column{}
+			if primaryReg.MatchString(content) {
+				if m.Primaries[table] == nil {
+					m.Primaries[table] = []*Column{}
 				}
-				m.Primaries[primary] = append(m.Primaries[primary], col)
-				col.Primary = primary
+				m.Primaries[table] = append(m.Primaries[table], col)
+				col.Primary = table
 			}
 
 			unique := getSecondSubmatchOrColumn(uniqueReg, name, content)
@@ -306,11 +309,6 @@ type primitiveType string
 // Type is an implementation of the Datatype
 func (x primitiveType) Type() string {
 	return string(x)
-}
-
-// Ref is an implementation of the Datatype
-func (x primitiveType) Ref() *Column {
-	return nil
 }
 
 func primitiveTypesAliases() map[string]DataType {
