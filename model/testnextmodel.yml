@@ -1,15 +1,16 @@
 # This file contains an example configuration
 
 accounts:
-  id: int primary
+  id: serial primary
   username: varchar(50) unique not null
   password: varchar not null
-  email: varchar not null
+  email: varchar not null unique
   email_verified_at: timestamp
-  created_at: timestamp default NOW()
+  created_at: timestamp default(NOW())
+  bio: text
 
 roles:
-  id: int primary
+  id: int primary auto increment
   name: varchar unique not null
 
 account_roles:
@@ -21,12 +22,16 @@ relationships:
   id: int primary
   account_id: accounts.id not null unique(account_relationship)
   relationship_id: accounts.id not null unique(account_relationship)
-  bond: bond_type default('friend')
   verified_at: timestamp
   token: varchar not null
 
-bond_type:
-- companion
-- fiance
-- spouce
-- friend
+posts:
+  id: serial primary
+  type: post_type default('general')
+  created_by: accounts.id not null
+  created_at: timestamp default(NOW())
+  context: text not null
+
+post_type:
+- general
+- blog

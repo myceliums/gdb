@@ -1,0 +1,44 @@
+name: ci-test
+on: [push]
+
+env:
+  TEST_DB_CONNECTION_STRING: 'postgresql://tester:SuperComplexPassword@localhost:5432/test?sslmode=disable'
+
+jobs:
+  build:
+    name: Test
+    runs-on: ubuntu-latest
+  
+    services:
+      postgres:
+        image: postgres:13
+        env:
+          POSTGRES_USER: tester
+          POSTGRES_PASSWORD: SuperComplexPassword
+          POSTGRES_DB: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Set up Go
+        uses: actions/setup-go@v2
+        with:
+          go-version: ^1.16
+        id: go
+
+      - name: Check out code into the Go module directory
+        uses: actions/checkout@v1
+
+      - name: Get dependencies
+        run: go mod download
+
+      - name: Testing
+        run: go test -cover ./...
+
+      - name: Build
+        run: go build ./cmd/gdb
+

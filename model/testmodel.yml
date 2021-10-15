@@ -1,35 +1,32 @@
 # This file contains an example configuration
 
-pkg: dbcontext
-tables:
-  accounts:
-    id: int primary
-    username: varchar(50) unique not null
-    password: varchar not null
-    email: varchar not null
-    email_verified_at: timestamp
-    created_at: timestamp default(NOW())
+accounts:
+  id: serial primary
+  username: varchar(50) unique not null
+  password: varchar not null
+  email: varchar not null
+  email_verified_at: timestamp
+  created_at: timestamp default(NOW())
 
-  roles:
-    id: int primary
-    name: varchar unique not null
+roles:
+  id: int primary auto increment
+  name: varchar unique not null
 
-  account_roles:
-    id: int primary
-    account_id: accounts.id not null
-    role_id: roles.id not null
+account_roles:
+  id: int primary
+  account_id: accounts.id not null
+  role_id: roles.id not null
 
-  relationships:
-    id: int primary
-    account_id: accounts.id not null unique(account_relationship)
-    relationship_id: accounts.id not null unique(account_relationship)
-    bond: bond_type default('friend')
-    verified_at: timestamp
-    token: varchar not null
+relationships:
+  id: int primary
+  account_id: accounts.id not null unique(account_relationship)
+  relationship_id: accounts.id not null unique(account_relationship)
+  bond: bond_type default('friend')
+  verified_at: timestamp
+  token: varchar not null
 
-enums:
-  bond_type:
-  - companion
-  - fiance
-  - spouce
-  - friend
+bond_type:
+- companion
+- fiance
+- spouce
+- friend

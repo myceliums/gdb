@@ -33,43 +33,77 @@ var (
 	// [0] primary(id_name)
 	// [1] (id_name)
 	// [2] id_name
-	primaryReg = regexp.MustCompile(`primary key|primarykey|primary(\((\w+)\))?`)
+	primaryReg = regexp.MustCompile(`primary key|primarykey|primary`)
 
 	// uniqueReg
 	// [0] unique(id_name)
 	// [1] (id_name)
 	// [2] id_name
 	uniqueReg = regexp.MustCompile(`unique(\((\w+)\))?`)
+
+	// autoIncrementReg
+	autoIncrementReg = regexp.MustCompile(`^serial|auto\ ?increment`)
 )
 
 // DataType is a model data structure
 type DataType interface {
 	Type() string
-	Ref() *Column
 }
 
-func newConfig(in []byte) (*config, error) {
-	x := new(config)
+func newConfig(in []byte) (*Config, error) {
+	var cfile map[string]interface{}
 
-	if err := yaml.Unmarshal(in, x); err != nil {
+	if err := yaml.Unmarshal(in, &cfile); err != nil {
 		return nil, err
+	}
+
+	x := new(Config)
+	x.Tables = map[string]map[string]string{}
+	x.Enums = map[string][]string{}
+	x.raw = in
+
+	for k, t := range cfile {
+		switch m := t.(type) {
+		case []interface{}:
+			var vals []string
+			for _, mm := range m {
+				if sm, ok := mm.(string); ok {
+					vals = append(vals, sm)
+				}
+			}
+			x.Enums[k] = vals
+		case map[interface{}]interface{}:
+			vals := map[string]string{}
+			for kk, mm := range m {
+				sk, kok := kk.(string)
+				smm, vok := mm.(string)
+				if kok && vok {
+					vals[sk] = smm
+				}
+			}
+			x.Tables[k] = vals
+		default:
+			return nil, fmt.Errorf("'%s' has an unknown configuration. want either map[string][]string or map[string]map[string]string, but has %T", k, t)
+		}
 	}
 
 	return x, nil
 }
 
-type config struct {
-	Pkg    string                       `yaml:"pkg"`
-	Tables map[string]map[string]string `yaml:"tables"`
-	Enums  map[string][]string          `yaml:"enums"`
+type Config struct {
+	Tables map[string]map[string]string `yaml:"tables,flow"`
+	Enums  map[string][]string          `yaml:"enums,flow"`
+	raw    []byte
 }
 
 // New returns a new initialized model
 func New(in []byte) (*Model, error) {
 	var x Model
-	x.Tables = map[string][]*Column{}
+	x.Tables = map[string]map[string]*Column{}
 	x.Primaries = map[string][]*Column{}
 	x.Uniques = map[string][]*Column{}
+	x.Foreigns = map[string]*Column{}
+	x.Enums = map[string]*Enum{}
 	x.aliases = primitiveTypesAliases()
 
 	conf, err := newConfig(in)
@@ -77,12 +111,14 @@ func New(in []byte) (*Model, error) {
 		return nil, err
 	}
 
-	x, err = appendTablesAndColums(x, conf)
+	x.conf = conf
+
+	x, err = appendTablesAndColums(x, conf.Tables)
 	if err != nil {
 		return nil, err
 	}
 
-	x = appendEnums(x, conf)
+	x = appendEnums(x, conf.Enums)
 
 	x, err = getDataTypes(x)
 	if err != nil {
@@ -94,34 +130,40 @@ func New(in []byte) (*Model, error) {
 
 // Model contains the database structure
 type Model struct {
-	Pkg       string
-	Tables    map[string][]*Column
-	Enums     []*Enum
+	Tables    map[string]map[string]*Column
+	Enums     map[string]*Enum
 	Uniques   map[string][]*Column
 	Primaries map[string][]*Column
+	Foreigns  map[string]*Column
 	aliases   map[string]DataType
+	conf      *Config
+}
+
+// Config returns the raw config
+func (x Model) Config() []byte {
+	return x.conf.raw
 }
 
 // Column is a database table column
 type Column struct {
-	Table    *string
-	Name     string
-	Datatype DataType
-	Size     int
-	Default  string
-	NotNull  bool
-	Check    string
-	rawtype  string
+	Table        string
+	Name         string
+	Datatype     DataType
+	Ref          *Column
+	Size         int
+	Default      string
+	NotNull      bool
+	Check        string
+	Primary      string
+	Unique       string
+	AutoIncement bool
+	rawtype      string
+	raw          string
 }
 
 // Type is an implementation of Datatype
 func (x *Column) Type() string {
 	return x.Datatype.Type()
-}
-
-// Ref is an implementation of DataType
-func (x *Column) Ref() *Column {
-	return x
 }
 
 // Enum is a numeric object that con be defined in the database
@@ -133,11 +175,6 @@ type Enum struct {
 // Type is an implementation of Datatype
 func (x Enum) Type() string {
 	return x.Name
-}
-
-// Enum is a numeric object that con be defined in the database
-func (x Enum) Ref() *Column {
-	return nil
 }
 
 func rawtype(context string) (rawtype string, size int) {
@@ -182,11 +219,19 @@ func getSecondSubmatchOrColumn(reg *regexp.Regexp, columnName, context string) s
 	return ``
 }
 
-func appendTablesAndColums(m Model, conf *config) (Model, error) {
-	for table, columns := range conf.Tables {
+func appendTablesAndColums(m Model, tables map[string]map[string]string) (Model, error) {
+	for table, columns := range tables {
+		if _, ok := m.Tables[table]; !ok {
+			m.Tables[table] = map[string]*Column{}
+		}
+
 		for name, content := range columns {
+			tname := table
+
 			col := new(Column)
-			col.Table = &table
+			col.raw = content
+
+			col.Table = tname
 			col.Name = name
 
 			col.rawtype, col.Size = rawtype(content)
@@ -194,12 +239,12 @@ func appendTablesAndColums(m Model, conf *config) (Model, error) {
 				return m, fmt.Errorf("no type found in table %s column %s", table, name)
 			}
 
-			primary := getSecondSubmatchOrColumn(primaryReg, name, content)
-			if primary != `` {
-				if m.Primaries[primary] == nil {
-					m.Primaries[primary] = []*Column{}
+			if primaryReg.MatchString(content) {
+				if m.Primaries[table] == nil {
+					m.Primaries[table] = []*Column{}
 				}
-				m.Primaries[primary] = append(m.Primaries[primary], col)
+				m.Primaries[table] = append(m.Primaries[table], col)
+				col.Primary = table
 			}
 
 			unique := getSecondSubmatchOrColumn(uniqueReg, name, content)
@@ -208,13 +253,15 @@ func appendTablesAndColums(m Model, conf *config) (Model, error) {
 					m.Uniques[unique] = []*Column{}
 				}
 				m.Uniques[unique] = append(m.Uniques[unique], col)
+				col.Unique = unique
 			}
 
 			col.Default = getFirstSubmatch(defaultReg, content)
 			col.Check = getFirstSubmatch(checkReg, content)
 			col.NotNull = notnullReg.MatchString(content)
+			col.AutoIncement = autoIncrementReg.MatchString(content)
 
-			m.Tables[table] = append(m.Tables[table], col)
+			m.Tables[table][name] = col
 			m.aliases[table+`.`+name] = col
 		}
 	}
@@ -222,13 +269,17 @@ func appendTablesAndColums(m Model, conf *config) (Model, error) {
 	return m, nil
 }
 
-func appendEnums(m Model, conf *config) Model {
-	for name, values := range conf.Enums {
+func appendEnums(m Model, enums map[string][]string) Model {
+	if enums == nil {
+		m.Enums = map[string]*Enum{}
+	}
+
+	for name, values := range enums {
 		enum := new(Enum)
 		enum.Name = name
 		enum.Values = values
 
-		m.Enums = append(m.Enums, enum)
+		m.Enums[name] = enum
 		m.aliases[name] = enum
 	}
 
@@ -241,7 +292,12 @@ func getDataTypes(m Model) (Model, error) {
 			if m.aliases[col.rawtype] == nil {
 				return m, fmt.Errorf("unrecognized datatype in table %s column %s type: %s", table, col.Name, col.rawtype)
 			}
+
 			col.Datatype = m.aliases[col.rawtype]
+			if ref, ok := col.Datatype.(*Column); ok {
+				col.Ref = ref
+				m.Foreigns[col.Table+`.`+col.Name] = col
+			}
 		}
 	}
 
@@ -255,11 +311,6 @@ func (x primitiveType) Type() string {
 	return string(x)
 }
 
-// Ref is an implementation of the Datatype
-func (x primitiveType) Ref() *Column {
-	return nil
-}
-
 func primitiveTypesAliases() map[string]DataType {
 	m := map[string]DataType{}
 	varchar := primitiveType(`varchar`)
@@ -271,6 +322,7 @@ func primitiveTypesAliases() map[string]DataType {
 	integer := primitiveType(`int`)
 	m[`int`] = &integer
 	m[`integer`] = &integer
+	m[`serial`] = &integer
 
 	float := primitiveType(`float`)
 	m[`float`] = &float

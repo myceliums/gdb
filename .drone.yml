@@ -1,0 +1,21 @@
+kind: pipeline
+name: default
+
+steps:
+- name: test
+  image: golangci/golangci-lint:latest-alpine
+  environment:
+    TEST_DB_CONNECTION_STRING: 'postgres://tester:ComplexPassword!23@db:5432/test?sslmode=disable'
+  commands:
+  - go mod tidy
+  - golangci-lint run
+  - sleep 5
+  - go test -v ./...
+
+services:
+- name: db
+  image: postgres:latest
+  environment:
+    POSTGRES_USER: tester
+    POSTGRES_PASSWORD: ComplexPassword!23
+    POSTGRES_DB: test
