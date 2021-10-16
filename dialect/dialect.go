@@ -1,44 +1,61 @@
 package dialect
 
+import "io"
+
 // Dialect is a parser that transforms the given arguments
 // of its functions into an SQL statement of the given dialect
 type Dialect interface {
-	Type(name string, size int) string
-	AddTable(name string, ifnotexists bool) string
-	DropTable(name string) string
-	AddColumn(table, column, typename string, size int) string
-	UpdateColumn(table, colum, typename string, size int) string
-	DropColumn(table, column string) string
-	AddPrimaryKey(table string, column []string) string
-	UpdatePrimaryKey(table string, column []string) string
-	DropPrimaryKey(table string) string
-	AddForeignKey(table, columnName, referenceTable, referenceColumn string) string
-	UpdateForeignKey(table, columnName, referenceTable, refrenceColumn string) string
-	DropForeignKey(table, columnName string) string
-	AddUnique(id, table string, column []string) string
-	UpdateUnique(id, table string, column []string) string
-	DropUnique(id, table string) string
-	SetNotNull(table, column string) string
-	DeleteNotNull(table, column string) string
-	AddCheck(table, column, check string) string
-	UpdateCheck(table, column, check string) string
-	DropCheck(table, column string) string
-	AddEnum(name string, values []string) string
-	AppendEnum(name, values string) string
-	DropEnum(name string) string
-	SetDefault(table, column, value string) string
-	DropDefault(table, column string) string
-	SetAutoIncrement(table, column string) string
-	UnsetAutoIncrement(table, column string) string
-
 	AddVersionTable() string
 	CheckVersion() string
 	InsertVersion() string
 
-	//Select(table string, columns ...string) string
-	//And(stmt1, stmt2 string) string
-	//Or(stmt1, stmt2 string) string
-	//Cursor(stmt string) (key, query string)
+	AddTable(wr io.Writer, name string, ifnotexists bool)
+	DropTable(wr io.Writer, name string)
+	AddColumn(wr io.Writer, table, column, typename string, size int)
+	UpdateColumn(wr io.Writer, table, colum, typename string, size int)
+	DropColumn(wr io.Writer, table, column string)
+	AddPrimaryKey(wr io.Writer, table string, column []string)
+	UpdatePrimaryKey(wr io.Writer, table string, column []string)
+	DropPrimaryKey(wr io.Writer, table string)
+	AddForeignKey(wr io.Writer, table, columnName, referenceTable, referenceColumn string)
+	UpdateForeignKey(wr io.Writer, table, columnName, referenceTable, refrenceColumn string)
+	DropForeignKey(wr io.Writer, table, columnName string)
+	AddUnique(wr io.Writer, id, table string, column []string)
+	UpdateUnique(wr io.Writer, id, table string, column []string)
+	DropUnique(wr io.Writer, id, table string)
+	SetNotNull(wr io.Writer, table, column string)
+	DeleteNotNull(wr io.Writer, table, column string)
+	AddCheck(wr io.Writer, table, column, check string)
+	UpdateCheck(wr io.Writer, table, column, check string)
+	DropCheck(wr io.Writer, table, column string)
+	AddEnum(wr io.Writer, name string, values []string)
+	AppendEnum(wr io.Writer, name, values string)
+	DropEnum(wr io.Writer, name string)
+	SetDefault(wr io.Writer, table, column, value string)
+	DropDefault(wr io.Writer, table, column string)
+	SetAutoIncrement(wr io.Writer, table, column string)
+	UnsetAutoIncrement(wr io.Writer, table, column string)
+
+	Select(wr io.Writer, table string, columns []string)
+	Insert(wr io.Writer, table string, columns []string)
+	Values(wr io.Writer, vals string)
+	Update(wr io.Writer, table string)
+	Set(wr io.Writer, column string, sq io.Reader)
+	Delete(wr io.Writer, table string)
+	Where(wr io.Writer, qc io.Writer)
+	InnerJoin(wr io.Writer, table, column, refTable, refColumn string)
+	OuterJoin(wr io.Writer, table, column, refTable, refColumn string)
+	LeftJoin(wr io.Writer, table, column, refTable, refColumn string)
+	RightJoin(wr io.Writer, table, column, refTable, refColumn string)
+	Returning(wr io.Writer, columns []string)
+	//And(wr io.Writer, stmt1, stmt2 string)
+	//Or(wr io.Writer, stmt1, stmt2 string)
+	Limit(wr io.Writer, l int)
+	//Offset(wr io.Writer, l int)
+
+	Cursor(query io.Reader, key string) string
+	CursorSelect(key string) string
+	CursorClose(key string) string
 }
 
 // GetByDriver returns a dialect of the given driver
